@@ -109,8 +109,8 @@ pip install pillow pywin32 numpy tkinterdnd2
 ```
 
 ## Known issues / planned work
-- [ ] PyInstaller build (`pyinstaller --onefile --windowed zebra_print.py`) to make a standalone EXE,
-      once the UI settles
+- [ ] Test the EXE on a second PC. Build it with:
+      `pyinstaller --onefile --windowed --collect-all tkinterdnd2 zebra_print.py`
 
 ## File structure
 ```
