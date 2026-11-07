@@ -7,6 +7,8 @@ photo software is needed.
 The printer can only make black dots, so the app dithers each image to 1-bit at 203 DPI and
 shows the result in a live preview before anything prints.
 
+![Label Printer Tools with a dithered image in the preview](docs/screenshot-image-tab.png)
+
 ## Features
 
 - Live preview with drag-to-crop
@@ -18,6 +20,10 @@ shows the result in a live preview before anything prints.
 - Live printer status, such as Ready, Out of labels and Out of ribbon
 - Print history with reprints
 - Alignment controls and a calibration test pattern
+
+![Output tab with media, darkness, speed, copies and wait settings](docs/screenshot-output-tab.png)
+
+*Screenshots use computer-generated demo images.*
 
 ## Requirements
 
