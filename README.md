@@ -62,7 +62,7 @@ While developing, `python dev.py` restarts the app on every save, even in the mi
 - **Darkness, speed and media stay on the printer after a job.** They last until they are
   changed or the printer restarts. Choosing "Printer setting" reloads all of the printer's last
   saved settings, which also drops any unsaved changes made on the printer.
-- **Calibrate with the test pattern.** Use the Align tab to set Y offset and Height adjust for
+- **Calibrate with the test pattern.** Use the Align tab to set Move up/down, Move left/right and Image height for
   your labels.
 
 ## Clear stuck jobs

@@ -26,8 +26,10 @@ Zebra ZT410 industrial printer via USB, without going through Adobe Lightroom. U
 - Build a 1-bit bitmap of the full label using PIL
 - Invert bytes (PIL 1=white, ZPL 1=black dot)
 - Send via `^GFA` (graphic field) hex command
-- `^PW812` guards against printing wider than the label
-- `^FO0,{y_offset}` positions the image; negative offsets crop top rows instead
+- `^PW812` guards against printing wider than the label; it only widens when moving right
+- `^FO{x_offset},{y_offset}` positions the image; negative offsets crop top rows or left columns
+  instead. Moving right is limited to 20 dots by the printhead. Row padding is kept white,
+  otherwise it prints as a black line.
 - Never send `^LT` — it conflicts with the Label Top value saved on the printer
 - Printer is on Gap/Notch media; `^LL` not needed (printer measures label length during calibration)
 - `~SD` (absolute darkness), `^PR` (speed) and `^MT` (T ribbon, D direct) are sent only when
@@ -70,8 +72,9 @@ Dither modes available:
 
 ## Alignment config (top of zebra_print.py)
 ```python
-Y_OFFSET_DOTS    = 0    # shift image down (+) or up (-); 8 dots = 1 mm
-HEIGHT_ADJUST_DOTS = 14 # make image taller (+) or shorter (-) than label height
+X_OFFSET_DOTS    = 0    # "Move left/right": shift image right (+) or left (-)
+Y_OFFSET_DOTS    = 0    # "Move up/down": shift image down (+) or up (-); 8 dots = 1 mm
+HEIGHT_ADJUST_DOTS = 14 # "Image height": make image taller (+) or shorter (-) than label height
 ```
 These are first-launch defaults; after that the saved settings win. Use the "Test pattern"
 button to calibrate. It prints a 1-dot border at exact label edges + 1 mm tick marks so you
@@ -94,7 +97,7 @@ Three panels: image list, preview, settings (tabs: Image, Output, Text, Align).
   label is out. It helps when back-to-back labels streak on ribbon.
 - **Text tab:** text on the label with `{n}`, `{total}`, `{name}`, `{date}`. The text itself is not
   saved between launches, so it can't end up on labels by accident.
-- **Align tab:** Y offset, Height adjust, test pattern
+- **Align tab:** Move up/down, Move left/right, Image height, test pattern
 - **History / Reprint last:** every run is logged with its settings; `history.jsonl` sits beside
   the settings file. History can reprint a run or copy its settings back into the app.
 - Status bar shows live printer state (Ready, Printhead open, Out of labels, Out of ribbon…)

@@ -41,12 +41,16 @@ LABEL_H_DOTS = 1219     # 6.0" × 203.2 dpi = 1219.2
 # ZT410 203 dpi max print width — never send wider than this or you print on the platen roller
 MAX_PRINT_WIDTH = 832
 
-# Y offset: shift the whole printed image down (+) or up (−), in dots.
+# Move left/right: shift the whole printed image right (+) or left (−), in dots.
+# Right is limited by the printhead: MAX_PRINT_WIDTH − LABEL_W_DOTS.
+X_OFFSET_DOTS = 0
+
+# Move up/down: shift the whole printed image down (+) or up (−), in dots.
 # Use the calibration test print (Print Test Pattern button) to measure your white strip,
 # then set this to that many dots.  Example: 16 dots = 2 mm down.
 Y_OFFSET_DOTS = 0
 
-# Height adjust: make the printed image taller (+) or shorter (−) than LABEL_H_DOTS, in dots.
+# Image height: make the printed image taller (+) or shorter (−) than LABEL_H_DOTS, in dots.
 # A positive value stretches the image to fill a bit more height for full-bleed designs.
 # Keep within ±~24 dots (3 mm) to avoid distorting the image noticeably.
 HEIGHT_ADJUST_DOTS = 14
@@ -313,14 +317,15 @@ def add_text(img1bit: Image.Image, path: str, flip: bool, overlay: TextOverlay,
     return canvas.rotate(-angle, expand=True) if angle else canvas
 
 
-def label_preview(img1bit: Image.Image, y_offset: int = Y_OFFSET_DOTS) -> Image.Image:
+def label_preview(img1bit: Image.Image, y_offset: int = Y_OFFSET_DOTS,
+                  x_offset: int = X_OFFSET_DOTS) -> Image.Image:
     """Place a prepared bitmap on a blank label the way image_to_zpl() positions it.
 
     A positive height adjust makes the bitmap taller than LABEL_H_DOTS, and all of those
     rows print, so the preview grows to show them.
     """
     label = Image.new('L', (LABEL_W_DOTS, max(LABEL_H_DOTS, img1bit.height)), 255)
-    label.paste(img1bit.convert('L'), (0, y_offset))
+    label.paste(img1bit.convert('L'), (x_offset, y_offset))
     return label
 
 
@@ -336,13 +341,17 @@ def label_print_seconds(speed: float) -> float:
 def image_to_zpl(img1bit: Image.Image,
                  y_offset: int = Y_OFFSET_DOTS,
                  options: PrinterOptions = PrinterOptions(),
-                 copies: int = 1) -> str:
+                 copies: int = 1,
+                 x_offset: int = X_OFFSET_DOTS) -> str:
     """Convert a 1-bit PIL image to a complete ZPL label.
 
     y_offset > 0  → shift image down (^FO y parameter)
     y_offset < 0  → crop that many rows from the top of the bitmap instead
                      (^FO can't go negative; we just skip those rows)
+    x_offset > 0  → shift image right, trimming anything past the printhead
+    x_offset < 0  → crop that many columns from the left of the bitmap instead
     """
+    full_width = img1bit.size[0]
     # Handle negative offset by cropping the top of the image
     if y_offset < 0:
         crop_rows = min(-y_offset, img1bit.size[1] - 1)
@@ -351,11 +360,22 @@ def image_to_zpl(img1bit: Image.Image,
     else:
         fo_y = y_offset
 
+    if x_offset < 0:
+        crop_cols = min(-x_offset, img1bit.size[0] - 1)
+        img1bit = img1bit.crop((crop_cols, 0, img1bit.size[0], img1bit.size[1]))
+        fo_x = 0
+    else:
+        fo_x = min(x_offset, MAX_PRINT_WIDTH - 1)
+        img1bit = img1bit.crop((0, 0, min(img1bit.size[0], MAX_PRINT_WIDTH - fo_x), img1bit.size[1]))
+
     w, h = img1bit.size
-    raw = img1bit.tobytes()
+    bytes_per_row = (w + 7) // 8
+    # Rows are padded to whole bytes. Keep the padding white, or it prints as a black line
+    padded = Image.new('1', (bytes_per_row * 8, h), 1)
+    padded.paste(img1bit, (0, 0))
+    raw = padded.tobytes()
     # PIL '1' mode: 1=white, 0=black.  ZPL ^GFA: 1=black dot.  Invert.
     inverted = bytes(b ^ 0xFF for b in raw)
-    bytes_per_row = (w + 7) // 8
     total_bytes = bytes_per_row * h
     hex_data = inverted.hex().upper()
 
@@ -364,9 +384,10 @@ def image_to_zpl(img1bit: Image.Image,
         + "^XA"
         + (f"^MT{options.media}" if options.media else "")
         + (f"^PR{options.speed}" if options.speed else "")
-        + f"^PW{min(w, MAX_PRINT_WIDTH)}"   # print width guard
+        # Print width guard. It only widens when moving right, so other labels stay put
+        + f"^PW{min(max(full_width, fo_x + w), MAX_PRINT_WIDTH)}"
         "^LH0,0"
-        f"^FO0,{fo_y}"
+        f"^FO{fo_x},{fo_y}"
         f"^GFA,{total_bytes},{total_bytes},{bytes_per_row},{hex_data}"
         + (f"^PQ{copies}" if copies > 1 else "")
         + "^XZ"
@@ -380,13 +401,14 @@ def image_to_zpl(img1bit: Image.Image,
 
 def make_test_pattern_zpl(y_offset: int = Y_OFFSET_DOTS,
                            height_adjust: int = HEIGHT_ADJUST_DOTS,
-                           options: PrinterOptions = PrinterOptions()) -> str:
+                           options: PrinterOptions = PrinterOptions(),
+                           x_offset: int = X_OFFSET_DOTS) -> str:
     """Generate a ZPL test-pattern label for alignment calibration.
 
     The pattern includes:
     - 1-dot border rectangle at the label edges
     - Tick marks every 1 mm (8 dots) along top and bottom, labelled every 5 mm
-    - Current Y_OFFSET_DOTS and HEIGHT_ADJUST_DOTS printed in the centre
+    - The current alignment values printed in the centre
     """
     W = LABEL_W_DOTS
     H = LABEL_H_DOTS + height_adjust
@@ -416,8 +438,9 @@ def make_test_pattern_zpl(y_offset: int = Y_OFFSET_DOTS,
     cx, cy = W // 2, H // 2
     lines = [
         "CALIBRATION TEST",
-        f"Y_OFFSET_DOTS = {y_offset}",
-        f"HEIGHT_ADJUST_DOTS = {height_adjust}",
+        f"Move up/down = {y_offset}",
+        f"Move left/right = {x_offset}",
+        f"Image height = {height_adjust}",
         f"Label: {W} x {H} dots",
         f"({W/203.2:.3f}\" x {H/203.2:.3f}\")",
     ]
@@ -431,7 +454,7 @@ def make_test_pattern_zpl(y_offset: int = Y_OFFSET_DOTS,
     draw.line([(cx, cy - 20), (cx, cy + 20)], fill=0, width=1)
 
     img1 = img.convert('1')
-    return image_to_zpl(img1, y_offset=y_offset, options=options)
+    return image_to_zpl(img1, y_offset=y_offset, options=options, x_offset=x_offset)
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +801,7 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
         self.progress_var  = tk.DoubleVar(value=0)
         self.tearoff_pause = tk.BooleanVar(value=False)
         self.label_wait    = tk.IntVar(value=0)
+        self.x_offset_var      = tk.IntVar(value=X_OFFSET_DOTS)
         self.y_offset_var      = tk.IntVar(value=Y_OFFSET_DOTS)
         self.height_adjust_var = tk.IntVar(value=HEIGHT_ADJUST_DOTS)
 
@@ -786,7 +810,8 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
             'folder': self.folder, 'printer': self.printer_var,
             'dither': self.dither_mode, 'flip': self.flip,
             'copies': self.quantity, 'tearoff': self.tearoff_pause, 'label_wait': self.label_wait,
-            'y_offset': self.y_offset_var, 'height_adjust': self.height_adjust_var,
+            'x_offset': self.x_offset_var, 'y_offset': self.y_offset_var,
+            'height_adjust': self.height_adjust_var,
             'speed': self.speed, 'media': self.media,
             'text_position': self.text_position, 'text_size': self.text_size,
             'text_band': self.text_band,
@@ -1242,13 +1267,18 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
 
     def _build_align_tab(self, tab):
         self._section(tab, "Alignment", first=True)
-        row = self._field(tab, "Y offset (dots)")
+        row = self._field(tab, "Move up/down (dots)")
         ttk.Spinbox(row, textvariable=self.y_offset_var, from_=-200, to=200, width=5,
                     font=FONT).pack(side='right')
-        row = self._field(tab, "Height adjust (dots)")
+        row = self._field(tab, "Move left/right (dots)")
+        ttk.Spinbox(row, textvariable=self.x_offset_var, from_=-200,
+                    to=MAX_PRINT_WIDTH - LABEL_W_DOTS, width=5, font=FONT).pack(side='right')
+        row = self._field(tab, "Image height (dots)")
         ttk.Spinbox(row, textvariable=self.height_adjust_var, from_=-200, to=200, width=5,
                     font=FONT).pack(side='right')
-        ttk.Label(tab, text=f"{mm_to_dots(1)} dots = 1 mm", style='Sub.TLabel').pack(
+        ttk.Label(tab, text=f"+ moves down or right, − moves up or left.\n"
+                            f"+ height is taller. {mm_to_dots(1)} dots = 1 mm",
+                  style='Sub.TLabel').pack(
             anchor='w', pady=(0, self._px(12)))
         ttk.Button(tab, text="Print test pattern", command=self._print_test_pattern).pack(fill='x')
 
@@ -1578,7 +1608,8 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
             return
         total = max(1, len(self.checked) * max(1, self._int(self.quantity, 1)))
         req = (path, self._read_image_settings(), self.crops.get(path, (0.5, 0.5)),
-               self._read_overlay(), self._int(self.y_offset_var, Y_OFFSET_DOTS), total)
+               self._read_overlay(), self._int(self.y_offset_var, Y_OFFSET_DOTS), total,
+               self._int(self.x_offset_var, X_OFFSET_DOTS))
         if req == self._preview_req:
             return
         self._preview_req = req
@@ -1593,11 +1624,11 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
             req = self._preview_req
             if req is None:
                 continue
-            path, settings, crop, overlay, y_offset, total = req
+            path, settings, crop, overlay, y_offset, total, x_offset = req
             try:
                 img = prepare_image(path, settings, crop)
                 img = add_text(img, path, settings.flip, overlay, 1, total)
-                result = label_preview(img, y_offset)
+                result = label_preview(img, y_offset, x_offset)
                 error = None
             except Exception as e:
                 result, error = None, str(e)
@@ -1733,10 +1764,11 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
                 y_offset=self._int(self.y_offset_var, Y_OFFSET_DOTS),
                 height_adjust=self._int(self.height_adjust_var, HEIGHT_ADJUST_DOTS),
                 options=options,
+                x_offset=self._int(self.x_offset_var, X_OFFSET_DOTS),
             )
             self._prepare_printer(options, printer)
             send_to_printer(zpl, printer)
-            self._set_status("Test pattern sent — measure the white strip, then adjust Y offset / Height adjust.")
+            self._set_status("Test pattern sent — measure the white strip, then adjust the Align settings.")
         except Exception as e:
             messagebox.showerror("Test Pattern Error", str(e))
 
@@ -1756,6 +1788,7 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
             'options': asdict(self._read_printer_options()),
             'crops': {p: self.crops[p] for p in paths if p in self.crops},
             'y_offset': self._int(self.y_offset_var, Y_OFFSET_DOTS),
+            'x_offset': self._int(self.x_offset_var, X_OFFSET_DOTS),
             'tearoff': self.tearoff_pause.get(),
             'label_wait': max(0, self._int(self.label_wait, 0)),
         })
@@ -1774,6 +1807,7 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
         overlay = TextOverlay(**job['overlay'])
         options = PrinterOptions(**job['options'])
         y_offset = job['y_offset']
+        x_offset = job.get('x_offset', X_OFFSET_DOTS)
         # Numbered or paused labels differ or stop between copies, so they go one at a time.
         # Everything else is a single job per image, with the printer repeating it.
         wait = job.get('label_wait', 0)
@@ -1784,7 +1818,7 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
         def send(bitmap, copies):
             nonlocal done
             labelled = add_text(bitmap, path, settings.flip, overlay, done + 1, total)
-            send_to_printer(image_to_zpl(labelled, y_offset, options, copies), printer)
+            send_to_printer(image_to_zpl(labelled, y_offset, options, copies, x_offset), printer)
             done += copies
             self._call_ui(self.progress_var.set, done / total * 100)
 
@@ -1912,6 +1946,7 @@ class ZebraPrintApp(tk.Tk, *DND_BASES):
         self.flip.set(settings['flip'])
         self.height_adjust_var.set(settings['height_adjust'])
         self.y_offset_var.set(run['y_offset'])
+        self.x_offset_var.set(run.get('x_offset', X_OFFSET_DOTS))
         self.quantity.set(run['copies'])
         self.label_wait.set(run.get('label_wait', 0))
         self.text_template.set(run['overlay']['template'])
